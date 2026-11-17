@@ -1,0 +1,154 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function admin() {
+      return request.auth != null && activeAdmin(request.auth.uid);
+    }
+
+    function activeAdmin(uid) {
+      let profile = /databases/$(database)/documents/admins/$(uid);
+      return exists(profile) && get(profile).data.active == true;
+    }
+
+    function text(value, limit) {
+      return value is string && value.size() > 0 && value.size() <= limit
+        && value.matches('[\\s\\S]*[^\\s][\\s\\S]*');
+    }
+
+    function exact(data, keys) {
+      return data.keys().hasOnly(keys) && data.keys().hasAll(keys);
+    }
+
+    function hours(value) {
+      return value is int && value >= 0 && value <= 24;
+    }
+
+    function validCredits(credits) {
+      let total = credits.pediatrics + credits.geriatric + credits.cardiac + credits.trauma + credits.other;
+      return exact(credits, ['pediatrics', 'geriatric', 'cardiac', 'trauma', 'other'])
+        && hours(credits.pediatrics) && hours(credits.geriatric) && hours(credits.cardiac)
+        && hours(credits.trauma) && hours(credits.other) && total >= 1 && total <= 24;
+    }
+
+    function validClass(data) {
+      return exact(data, ['title', 'date', 'startTime', 'endTime', 'location', 'instructor',
+          'credits', 'phase', 'createdAt', 'closedAt'])
+        && text(data.title, 120) && text(data.location, 120) && text(data.instructor, 100)
+        && data.date.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])')
+        && data.startTime.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
+        && data.endTime.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
+        && validCredits(data.credits);
+    }
+
+    function validIssuer(data) {
+      return exact(data, ['organization', 'approvalNumber', 'director', 'signature'])
+        && text(data.organization, 120) && text(data.approvalNumber, 60) && text(data.director, 100)
+        && data.signature is string && data.signature.size() < 90000
+        && data.signature.matches('data:image/png;base64,[A-Za-z0-9+/=]+');
+    }
+
+    function receipt(code) {
+      return code.matches('[a-f0-9]{48}');
+    }
+
+    function rating(value) {
+      return value is int && value >= 1 && value <= 5;
+    }
+
+    match /admins/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+    }
+
+    match /settings/issuer {
+      allow get: if admin();
+      allow create, update: if admin() && validIssuer(request.resource.data);
+    }
+
+    match /classes/{classId} {
+      function classInfo() {
+        return get(/databases/$(database)/documents/classes/$(classId)).data;
+      }
+
+      function nextClass() {
+        return getAfter(/databases/$(database)/documents/classes/$(classId)).data;
+      }
+
+      function issuerRef() {
+        return /databases/$(database)/documents/classes/$(classId)/private/issuer;
+      }
+
+      function attendeeRef(code) {
+        return /databases/$(database)/documents/classes/$(classId)/attendees/$(code);
+      }
+
+      function evaluationRef(code) {
+        return /databases/$(database)/documents/classes/$(classId)/evaluations/$(code);
+      }
+
+      function certificateRef(code) {
+        return /databases/$(database)/documents/classes/$(classId)/certificates/$(code);
+      }
+
+      function draftTransition(old, next, changed) {
+        return old.phase == 'draft' && (
+          (next.phase == 'draft' && changed.hasOnly(['title', 'date', 'startTime', 'endTime', 'location', 'instructor', 'credits']))
+          || (next.phase == 'open' && changed.hasOnly(['phase']) && validIssuer(getAfter(issuerRef()).data))
+        );
+      }
+
+      allow get: if admin() || resource.data.phase in ['open', 'ended'];
+      allow list: if admin();
+      allow create: if admin() && classId.matches('[a-f0-9]{24}') && validClass(request.resource.data)
+        && request.resource.data.phase == 'draft' && request.resource.data.createdAt == request.time
+        && request.resource.data.closedAt == null;
+      allow update: if admin() && validClass(request.resource.data) && (
+        draftTransition(resource.data, request.resource.data, request.resource.data.diff(resource.data).affectedKeys())
+        || (resource.data.phase == 'open' && request.resource.data.phase == 'ended'
+          && request.resource.data.closedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['phase', 'closedAt']))
+      );
+
+      match /private/issuer {
+        allow get: if admin();
+        allow create: if admin() && classInfo().phase == 'draft' && nextClass().phase == 'open'
+          && validIssuer(request.resource.data)
+          && request.resource.data == get(/databases/$(database)/documents/settings/issuer).data;
+      }
+
+      // An unguessable receipt is the attendee's credential. Only admins can list records.
+      match /attendees/{code} {
+        allow get: if admin() || (receipt(code) && classInfo().phase in ['open', 'ended']);
+        allow list: if admin();
+        allow create: if receipt(code) && classInfo().phase == 'open'
+          && exact(request.resource.data, ['firstName', 'lastName', 'department', 'level', 'signedInAt', 'confirmedAt'])
+          && text(request.resource.data.firstName, 60) && text(request.resource.data.lastName, 60)
+          && text(request.resource.data.department, 120)
+          && request.resource.data.level in ['EMR', 'EMT', 'AEMT', 'Paramedic']
+          && request.resource.data.signedInAt == request.time && request.resource.data.confirmedAt == null;
+        allow update: if admin() && classInfo().phase == 'ended' && resource.data.confirmedAt == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmedAt'])
+          && request.resource.data.confirmedAt == request.time
+          && getAfter(certificateRef(code)).data.confirmedAt == request.time;
+      }
+
+      match /evaluations/{code} {
+        allow get: if admin() || (receipt(code) && classInfo().phase == 'ended' && exists(attendeeRef(code)));
+        allow list: if admin();
+        allow create: if receipt(code) && classInfo().phase == 'ended' && exists(attendeeRef(code))
+          && exact(request.resource.data, ['content', 'instructor', 'facility', 'comments', 'submittedAt'])
+          && rating(request.resource.data.content) && rating(request.resource.data.instructor)
+          && rating(request.resource.data.facility) && request.resource.data.comments is string
+          && request.resource.data.comments.size() <= 1500 && request.resource.data.submittedAt == request.time;
+      }
+
+      match /certificates/{code} {
+        allow get: if admin() || (receipt(code) && exists(evaluationRef(code)));
+        allow create: if admin() && receipt(code) && classInfo().phase == 'ended'
+          && exact(request.resource.data, ['issuer', 'confirmedAt'])
+          && request.resource.data.confirmedAt == request.time
+          && getAfter(attendeeRef(code)).data.confirmedAt == request.time
+          && request.resource.data.issuer == get(issuerRef()).data;
+      }
+    }
+  }
+}
