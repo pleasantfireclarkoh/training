@@ -2,6 +2,10 @@
 
 A GitHub Pages site for managing in-person Ohio EMS continuing education classes. Firebase Authentication handles administrator access. Cloud Firestore stores courses, attendance, evaluations, and certificate records.
 
+Certificates use the border, emblems, layout, and wording from the provided PTFD CE certificate template. The certificate fills the attendee's name and certification level, total hours, course title, instructor, date, and C.E.U. site number. The lower-left signature area shows the program director in place of the template's F.E.S.I. number. Category hours appear along the bottom. The print layout uses one landscape US Letter page.
+
+Class sign-in collects each attendee's email address and queues an email with their personal evaluation and certificate link. Activate the Google Apps Script sender using [the email setup guide](apps-script/SETUP.md). The sender files belong in the repository's `apps-script` folder. Publish the updated Firestore rules when enabling this feature.
+
 ## Preview locally
 
 Run `npm start` from the project folder. Open [the demo](http://127.0.0.1:4173/?demo=1) using sample information. Demo records stay in the browser. To try the full demo in two tabs, create and open a class, open the class link, sign in, then refresh the roster tab and end the class. Open the private link to submit the evaluation and confirm completion in the roster. The certificate is marked as a sample.
@@ -19,7 +23,7 @@ GitHub Pages publishes the `docs` directory. The original certificate references
 ## Run a class
 
 1. **Create training.** Enter the title, date, time (Ohio Eastern Time), location, EMS instructor of record, and credit hours for Pediatrics, Geriatric, Cardiac, Trauma, and Other. Hours can be split between categories. The site accepts 0.5 to 12 total hours for a single-day class.
-2. **Open class sign-in.** Share the class link at the session. Attendees provide their first and last name, department, and one of EMR, EMT, AEMT, or Paramedic. Each attendee should save their private link. A program administrator can recover the link for an attendee through the roster.
+2. **Open class sign-in.** Share the class link at the session. Attendees provide their first and last name, department, email, and one of EMR, EMT, AEMT, or Paramedic. The Apps Script sender emails their personal evaluation and certificate link. Track email status and queue another copy through the roster when needed.
 3. **End the class.** This closes sign-in and makes the evaluation available through each private link. Confirm each participant's successful completion in the roster after checking the course's completion requirements.
 4. **Issue a certificate.** The participant's private link shows the certificate when the roster records confirmation and the evaluation is complete. They can print it or use their browser's Save as PDF option. Training details and approved issuer data are fixed when sign-in opens. Use a new draft for a repeat offering.
 5. **Keep records.** Review the evaluation summary and export the roster and individual ratings and comments as CSV. Treat those exports and private attendee links as confidential. The portal tracks course feedback and completion confirmation. Maintain the course materials, any physician and instructor documentation, and knowledge or skill testing records in the approved program's records.
